@@ -1,0 +1,213 @@
+---
+title: "Forest Predictions"
+author: "Hans-Peter Bakker for David Kinsler"
+date: "29 September 2018"
+output:
+  pdf_document: default
+  html_document: default
+bibliography: david.bib
+---
+---
+nocite: |
+        @bestglm, @rpart, @rpartPlot, @caret, @faraway, @randomForest, @RStudio
+...
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, error = FALSE, warning = FALSE)
+```
+
+```{r}
+# load packages
+library(bestglm)
+library(rpart)
+library(rpart.plot)
+library(caret)
+library(faraway)
+library(randomForest)
+```
+
+#### Introduction
+
+This is a first draft exploration of an analysis undertaken by David Kinsler from Rhodes University's Geography Department in which he aims to consider the role of various independent variables on the prediction of any given site to be either defined as "Forest" or not.
+
+This report assumes the theoretical basis and the veracity of the dataset that was supplied.
+
+Given the binomial nature of the research question, a logistic regression was applied in the preliminary analysis below.
+
+Please note that this document can be supplied in either an html, pdf or MS Word format and all visual elements can be supplied in various image formats, including JPEG PNP or TIFF files.
+
+After reading in the supplied .csv datafile, two data frames, with four and eight classes respectively for *Aspect* were created and variable names changed to: *TPI, Gradient, Aspect, Wind, Buffer, Forest*. Three variables (*TPI, Aspect, Forest*) were classed as unordered categorical variables.
+
+```{r}
+#read in the datafile
+df_all <- read.csv("forest_data2.csv")
+
+# rename for easier coding
+names(df_all) <- c("TPI", "Gradient", "Aspect", "Aspect", "Aspect", "Wind","Buffer", "Forest")
+
+# data frame for 4 classes:
+df4 <- df_all[,-c(3,5)]
+
+# data frame for 8 classes:
+df8 <- df_all[,-c(3,4)]
+
+#change variables to categoricals 
+df4$TPI <- factor(df4$TPI, ordered = FALSE)
+df4$Aspect <- factor(df4$Aspect, ordered = FALSE)
+df4$Forest <- factor(df4$Forest, ordered = FALSE)
+df8$TPI <- factor(df8$TPI, ordered = FALSE)
+df8$Aspect <- factor(df8$Aspect, ordered = FALSE)
+df8$Forest <- factor(df8$Forest, ordered = FALSE)
+```
+
+#### Basic Summary and Correlations
+
+The basic summaries and correlations (using the 4 classes of *Aspect*) show below indicate:
+
+* relatively low levels of representation of TPI 4 & 6, which may impact on their significance
+* no strongly correlated variables
+* no missing values
+* no reasons for concerns with regard to extreme outlyers
+
+```{r}
+
+# consider summary of data
+summary(df4) # seems OK. No NAs, but low representation of TPI levels 4 & 6
+summary(df8) # seems OK. No NAs, but low representation of TPI levels 4 & 6
+
+# basic correlations
+round(cor(df_all[,-c(3,5)]), 2) # no obviously strong correlations
+```
+
+#### Considering Inclusion of all Independent Variables
+
+To consider the value of using all independent variables as opposed to reducing the feature space to a more parsimonious model, an exhaustive fitting procedure in which all possible models were considered was followed. Based on their *Bayesian Information Criterion* (BIC) values the five *best* models, in order of increasing BIC were identified and shown below. This procedure would suggest the use of all the variables in the model.
+
+```{r}
+# consider best model options in case model improves with fewer independent variables
+mod_best <- bestglm(df8, family = binomial)
+mod_best$BestModels # "best includes all five independent variables.
+```
+#### Model Fitting
+
+In this draft both the 4-class and 8-class datasets were used in fitting a logistic regression model. 
+
+The summary output showing the coefficients indicate that all the aspects in the 8-class model are significant. Both models show TPI4 not to be a significant coefficient in the model. Given the relatively low representivity of this level in the data, this result is not entirely unexpected. Interestingly TPI6 does appear to be significant.
+
+```{r}
+# basic first model
+mod_lreg4 <- glm(Forest ~ ., family = "binomial", data = df4)
+mod_lreg8 <- glm(Forest ~ ., family = "binomial", data = df8)
+
+summary(mod_lreg4) # TPI4 is not significant. Makes sense given its relatively low representation.
+summary(mod_lreg8)
+```
+
+#### Model Fit and Diagnostics
+
+A measure of fit which is analogous with $R^2$ - a popular measure of fit for normal linear models as a indication of the proportion of variance explained by the model - as described by Nagelkerke (1991) and cited in @farawayExt (p41) was used to calculate a proportion of variance explained by the two models:
+
+The proportion of variance explained by the model using 4 classes of *Aspect* was determined to be  `r round((1-exp((mod_lreg4$deviance - mod_lreg4$null.deviance)/nrow(df4)))/(1-exp(-mod_lreg4$null.deviance/nrow(df4))),3)` compared with `r round((1-exp((mod_lreg8$deviance - mod_lreg8$null.deviance)/nrow(df8)))/(1-exp(-mod_lreg8$null.deviance/nrow(df8))),3)` for the 8-classes of *Aspect*. This suggests the 8-class model to be the stronger of the two. 
+
+Half normal plots (*halfnorm*) of the residuals for both models are shown below. Both plots suggest evidence of a fit without overdispersion of residuals @farawayExt. Furthermore, the more consistent straight line of the 8-class model provided additional support for this model as the preferred one.
+
+```{r fig.width = 4, fig.height = 3}
+halfnorm(residuals(mod_lreg4), main = "4-class Model", cex = 0.5, pch = ".")
+halfnorm(residuals(mod_lreg8), main = "8-class Model", cex = 0.5, pch = ".")
+```
+
+#### Predictions and Trees
+
+In this section various techniques for predictions as well as the application of partition trees for explanatory purposes are considered. To test the strength of prediction, out-of-sample *test* sets consisting of 30% of cases were constructed.
+
+```{r}
+set.seed(123)
+indtrain <- createDataPartition(1: nrow(df4), p = 0.7, list = FALSE)
+train4 <- df4[indtrain,]
+test4 <- df4[-indtrain,]
+train8 <- df8[indtrain,]
+test8 <- df8[-indtrain,]
+```
+
+##### Logistic Regression Models
+
+From the confusion matrices shown below, the out-of-sample prediction for the 8-class model shows a slightly better overall prediction accuracy of ~74% compared with ~73%
+
+```{r}
+
+# models based on training sets only
+mod_train4 <- glm(Forest ~ ., family = "binomial", data = train4) 
+mod_train8 <- glm(Forest ~ ., family = "binomial", data = train8) 
+
+# predictions from logistic regressions
+# confusion matrix
+preds4 <- as.factor(ifelse(predict(mod_train4, newdata = test4, type = "response") > 0.5, "1", "0"))
+preds8 <- as.factor(ifelse(predict(mod_lreg8, newdata = test8, type = "response") > 0.5, "1", "0"))
+confusionMatrix(preds4, as.factor(test4$Forest))
+confusionMatrix(preds8, as.factor(test8$Forest))
+```
+
+##### Partition Trees
+
+A parition tree was first considered purely for explanatory purposes and utilising the full datasets. Two version of plots for the two models under consideration are shown below.
+
+```{r}
+# consider classification trees for explanatory reasons:
+tree_df4 <- rpart(factor(Forest) ~ ., data = df4)
+tree_df8 <- rpart(factor(Forest) ~ ., data = df8)
+```
+
+```{r}
+rpart.plot::prp(tree_df4, 4, main = "4-class Model")
+```
+
+```{r}
+rpart.plot::rpart.plot(tree_df4, cex = 0.45, type = 4, main = "4-class Model")
+```
+
+```{r}
+rpart.plot::prp(tree_df8, 4, main = "8-class Model")
+```
+
+```{r}
+rpart.plot::rpart.plot(tree_df8, cex = 0.45, type = 4, main = "8-class Model")
+```
+
+For interest sake the predictive power of a single tree was considered. The confusion matrices printed below would suggest that the out-of-sample prediction for the 4-class model is slightly better at ~75% compared with the 8-class model at ~72%.
+
+```{r}
+# predictions using the models based on training sets
+pred_class4 <- predict(rpart(factor(Forest) ~ ., data = train4), type = "class", newdata = test4)
+pred_class8 <- predict(rpart(factor(Forest) ~ ., data = train8), type = "class", newdata = test4)
+
+confusionMatrix(data = factor(pred_class4), reference = factor(test4$Forest))
+confusionMatrix(data = factor(pred_class8), reference = factor(test8$Forest))
+```
+
+##### Random Forest
+
+A simple random forest using 500 trees was used to predict out-of-sample levels for *Forest*. In this case the 8-case model with overall accuracy of ~81% slightly outperforms the 4-case model with an out-of-sample accuracy of ~80%. This also suggest the random forest to be the more effective predictive method of the alternatives considered here.
+
+```{r}
+# prediction power of basic random forest
+forest_df4 <- randomForest(factor(Forest) ~ ., data = train4, ntree = 500 )
+forest_df8 <- randomForest(factor(Forest) ~ ., data = train8, ntree = 500 )
+
+pred_class_forest4 <- predict(forest_df4, type = "class", newdata = test4)
+pred_class_forest8 <- predict(forest_df8, type = "class", newdata = test8)
+
+confusionMatrix(data = factor(pred_class_forest4), reference = factor(test4$Forest))
+confusionMatrix(data = factor(pred_class_forest8), reference = factor(test8$Forest))
+```
+
+#### Please note:
+*The interpretation of the estimated coefficients needs to consider the logistic nature of these estimating procedures. Please don't hesitate to ask for help*
+
+Below are some guidelines to help with the interpretation. This case considers the 4-class model.
+
+The first formula links the intercept and the 11 coefficient estimates with observed variable values.
+$$log(odds) = \beta_0 + \beta_1TPI1 + \beta_2TPI2 + ... + \beta_6Gradient + \beta_7Aspect2 + ... + \beta_{10}Wind + \beta_{11}Buffer + \epsilon$$
+where, $$odds = \frac{(Probability(Sucess))}{Probability(Failure)}$$ (just double-check the coding here. It is possible that success is *Forest* and failure is *not Forest*, or the other way around). After some basic mathematical transformation this gives you:
+$$P(Success) = \frac{odds}{(1 + odds)}$$
+
+#### References
